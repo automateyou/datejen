@@ -177,7 +177,7 @@
       <div class="tab active">Chat</div>
     </div>
   </div>
-  <div id="timerBanner"><span id="timerText">⏱ you have 10 min max, once you reply before the human Jen decides if she'll get in touch with you</span></div>
+  <div id="timerBanner"><span id="timerText">⏱ you have 5 min max, once you reply before the human Jen decides if she'll get in touch with you</span></div>
   <div id="messages"></div>
   <div id="inputBar">
     <div id="inputRow">
@@ -231,7 +231,7 @@ document.getElementById("headerPhoto").src = JEN_PHOTO;
 
 const JEN_SYSTEM = ""; // personality now lives on the server (api/chat.js)
 
-const MAX_SECONDS = 600;
+const MAX_SECONDS = 300;
 let seconds = MAX_SECONDS;
 let started = false;
 let ended = false;
@@ -339,7 +339,7 @@ function render(){
 
 function updateTimer(){
   if(ended) return;
-  if(!started){ timerText.textContent = "⏱ you have 10 min max, once you reply before the human Jen decides if she'll get in touch with you"; return; }
+  if(!started){ timerText.textContent = "⏱ you have 5 min max, once you reply before the human Jen decides if she'll get in touch with you"; return; }
   timerText.textContent = "⏱ " + fmt(seconds) + " left — then the human " + (ACTIVE?ACTIVE.name:"") + " decides if she'll reach out";
   if(seconds <= 60){ timerBanner.classList.add("low"); } else { timerBanner.classList.remove("low"); }
 }
@@ -365,6 +365,24 @@ async function callJen(history){
   return (data.reply || "").trim();
 }
 
+// Resilient version: retries transient failures (rate limits, empty/blocked
+// responses) with short backoff before giving up, so a single blip doesn't
+// make the avatar break character mid-chat.
+async function callJenResilient(history){
+  const waits = [600, 1400, 2600]; // ms backoff between attempts
+  for(let attempt=0; attempt<=waits.length; attempt++){
+    try{
+      const reply = await callJen(history);
+      if(reply && reply.trim()) return reply;        // good reply
+      // empty/blocked reply -> treat as transient, retry
+    }catch(e){
+      if(attempt === waits.length) throw e;          // out of retries
+    }
+    if(attempt < waits.length) await new Promise(r=>setTimeout(r, waits[attempt]));
+  }
+  return ""; // exhausted; caller decides what to show
+}
+
 async function send(){
   const t = inputEl.value.trim();
   if(!t || thinking || ended) return;
@@ -376,37 +394,33 @@ async function send(){
   sendBtn.disabled = true;
   render();
   try{
-    const reply = await callJen(messages);
+    const reply = await callJenResilient(messages);
     if(ended) return;
     if(reply && reply.includes("[[MD_DETECTED]]")){
       thinking = false; sendBtn.disabled = false;
       mdMatch();
       return;
     }
+    if(reply && reply.includes("[[END_CHAT]]")){
+      thinking = false; sendBtn.disabled = false; render();
+      const closing = reply.replace("[[END_CHAT]]", "").trim();
+      if(closing) await typewriterAdd(closing);
+      endDate(); // shows the wrap-up + sends the transcript/score
+      return;
+    }
     thinking = false; sendBtn.disabled = false; render();
     if(reply){ await typewriterAdd(reply); }
-    else {
-      // empty reply: retry once quietly
-      thinking = true; render();
-      const retry = await callJen(messages);
-      thinking = false; render();
-      if(retry && !ended) await typewriterAdd(retry);
-      else if(!ended) await typewriterAdd("Hang on, give me a sec — what were you saying? 🙂");
+    else if(location.search.includes("debug")){
+      await typewriterAdd("[debug] empty reply after retries");
+    } else {
+      await typewriterAdd("sorry, i am having a bit of brain fog right now. give me some time to think");
     }
   }catch(e){
-    // Don't break character. Retry once quietly, then stay graceful.
-    try{
-      const retry = await callJen(messages);
-      thinking = false; sendBtn.disabled = false; render();
-      if(retry && !ended) await typewriterAdd(retry);
-      else if(!ended) await typewriterAdd("Hang on, give me a sec — what were you saying? 🙂");
-    }catch(e2){
-      thinking = false; sendBtn.disabled = false;
-      if(location.search.includes("debug")){
-        if(!ended) await typewriterAdd("[debug] " + String(e2 && e2.message || e2));
-      } else if(!ended){
-        await typewriterAdd("Hang on, give me a sec — what were you saying? 🙂");
-      }
+    thinking = false; sendBtn.disabled = false;
+    if(location.search.includes("debug")){
+      if(!ended) await typewriterAdd("[debug] " + String(e && e.message || e));
+    } else if(!ended){
+      await typewriterAdd("sorry, i am having a bit of brain fog right now. give me some time to think");
     }
   }finally{
     thinking = false;
@@ -423,11 +437,11 @@ async function endDate(){
   if(timerInterval) clearInterval(timerInterval);
   timerBanner.style.display = "none";
   saveConversation("time up — Jen to decide");
-  document.getElementById("inputBar").innerHTML = '<div id="endedNote">the 10 minutes are up — Jen will be in touch 💌</div>';
+  document.getElementById("inputBar").innerHTML = '<div id="endedNote">the 5 minutes are up — Jen will be in touch 💌</div>';
 
   const card = document.createElement("div");
   card.id = "endCard";
-  card.innerHTML = '<div class="top"><img src="'+PHOTO+'" alt="'+ACTIVE.name+'"><h3>time\u2019s up! ⏱</h3><p>thanks for chatting with me for 10 minutes 💛<br>the <b>real '+ACTIVE.name+'</b> will read this and decide if she wants to keep talking to you.</p></div><div id="readTitle">— '+ACTIVE.name.toUpperCase()+'\u2019S PRIVATE READ —</div><div id="readBody">reading the convo… 🤔</div>';
+  card.innerHTML = '<div class="top"><img src="'+PHOTO+'" alt="'+ACTIVE.name+'"><h3>time\u2019s up! ⏱</h3><p>thanks for chatting with me for 5 minutes 💛<br>the <b>real '+ACTIVE.name+'</b> will read this and decide if she wants to keep talking to you.</p></div><div id="readTitle">— '+ACTIVE.name.toUpperCase()+'\u2019S PRIVATE READ —</div><div id="readBody">reading the convo… 🤔</div>';
   messagesEl.appendChild(card);
   messagesEl.scrollTop = messagesEl.scrollHeight;
 
@@ -617,6 +631,12 @@ async function sendRecording(){
     const data = await res.json();
     let reply = (data.reply || "").trim();
     if(reply.includes("[[MD_DETECTED]]")){ thinking=false; sendBtn.disabled=false; render(); mdMatch(); return; }
+    if(reply.includes("[[END_CHAT]]")){
+      thinking=false; sendBtn.disabled=false; render();
+      const closing = reply.replace("[[END_CHAT]]","").trim();
+      if(closing && !ended) await typewriterAdd(closing);
+      endDate(); return;
+    }
     if(!reply) reply = "Aw, I loved hearing that 🥰 tell me more";
     thinking = false; sendBtn.disabled = false; render();
     if(!ended) await typewriterAdd(reply);
