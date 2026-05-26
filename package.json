@@ -1,0 +1,7 @@
+{
+  "name": "jen-hinge-date",
+  "version": "1.0.0",
+  "private": true,
+  "description": "A virtual typing date with Jen, powered by Claude.",
+  "type": "module"
+}
