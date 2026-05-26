@@ -1,7 +1,5 @@
 {
-  "version": 2,
-  "public": false,
   "rewrites": [
-    { "source": "/", "destination": "/index.html" }
+    { "source": "/((?!api/).*)", "destination": "/index.html" }
   ]
 }

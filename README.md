@@ -47,3 +47,15 @@ If you ever want Jen back on Claude instead of Gemini, the model call lives in
 - `api/chat.js`        the endpoint that plays Jen (holds the personality)
 - `api/debrief.js`     the end-of-date private read
 - `vercel.json`        routing config
+
+## Email notifications (FREE) — every conversation to your inbox
+Each finished chat (transcript + alignment score + match's name/email/phone)
+gets emailed to you, for both Jen and Leah.
+
+1. Open `notify-email-AppsScript.gs` (in this folder) and follow the steps at
+   the top — it's a free Google Apps Script that does the emailing.
+2. It currently sends to: longevityoffices@gmail.com  (change SEND_TO to edit).
+3. After deploying the script, copy its Web App URL and add it to Vercel:
+   Settings -> Environment Variables -> NOTIFY_WEBHOOK = <that URL> -> redeploy.
+
+If NOTIFY_WEBHOOK isn't set, the site still works fine — it just won't email.

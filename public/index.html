@@ -249,7 +249,9 @@ function typewriterAdd(fullText){
   return new Promise(resolve=>{
     if(ended){ resolve(); return; }
     streaming = { text: fullText, shown: 0 };
-    render();
+    render(); // draw the streaming bubble once
+    // grab the streaming bubble element so we can update just its text (no full re-render -> no flashing)
+    const streamBubble = messagesEl.querySelector(".bubble.jen.streaming");
     const tick = ()=>{
       if(ended){ streaming = null; resolve(); return; }
       streaming.shown += 1;
@@ -261,8 +263,11 @@ function typewriterAdd(fullText){
         saveConversation("in progress");
         resolve();
       } else {
-        render();
-        // fast: ~14ms per char, tiny natural pause after sentence punctuation
+        // update ONLY the text of the streaming bubble
+        if(streamBubble){
+          streamBubble.textContent = streaming.text.slice(0, streaming.shown);
+          messagesEl.scrollTop = messagesEl.scrollHeight;
+        }
         const ch = streaming.text[streaming.shown-1];
         const delay = /[.!?,]/.test(ch) ? 70 : 14;
         setTimeout(tick, delay);
@@ -308,7 +313,7 @@ function render(){
     img.className="msgPhoto"; img.src=PHOTO; img.alt=ACTIVE ? ACTIVE.name : "";
     row.appendChild(img);
     const b = document.createElement("div");
-    b.className = "bubble jen";
+    b.className = "bubble jen streaming";
     b.textContent = streaming.text.slice(0, streaming.shown);
     row.appendChild(b);
     messagesEl.appendChild(row);
