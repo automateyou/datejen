@@ -34,7 +34,7 @@
   /* header */
   #header{padding:6px 18px 0;flex-shrink:0;}
   #headerRow{display:flex;align-items:center;gap:14px;}
-  #back{font-size:26px;color:var(--ink);font-weight:300;}
+  #back{font-size:26px;color:var(--ink);font-weight:300;cursor:pointer;padding:0 4px;}
   #headerPhoto{width:40px;height:40px;border-radius:50%;object-fit:cover;}
   #headerName{font-size:27px;font-weight:800;color:var(--ink);letter-spacing:-.5px;}
   #tabs{display:flex;margin-top:12px;}
@@ -143,6 +143,8 @@
   #selectScreen{position:absolute;inset:0;background:#fff;z-index:30;
     display:flex;align-items:center;justify-content:center;padding:24px;animation:popIn .3s ease;}
   #selectInner{text-align:center;width:100%;}
+  #hingeLogo{font-family:var(--body);font-weight:900;font-size:44px;color:var(--accent);
+    letter-spacing:-1px;margin-bottom:22px;line-height:1;}
   #selectTitle{font-size:24px;font-weight:800;color:var(--ink);margin-bottom:6px;}
   #selectSub{font-size:14px;color:var(--dim);margin-bottom:26px;}
   #pickRow{display:flex;gap:16px;justify-content:center;flex-wrap:wrap;}
@@ -163,13 +165,12 @@
   <div id="statusbar"><span id="clock">4:06</span><span style="letter-spacing:1px;">● ● ●</span></div>
   <div id="header">
     <div id="headerRow">
-      <span id="back">‹</span>
+      <span id="back" role="button" title="Switch person">‹</span>
       <img id="headerPhoto" alt="Jen" />
       <span id="headerName">Jen</span>
     </div>
     <div id="tabs">
       <div class="tab active">Chat</div>
-      <div class="tab inactive">Profile</div>
     </div>
   </div>
   <div id="timerBanner"><span id="timerText">⏱ you have 10 min max, once you reply before the human Jen decides if she'll get in touch with you</span></div>
@@ -208,14 +209,14 @@ const CHARACTERS = {
     photo: JEN_PHOTO,
     persona: "jen",
     opener: "hey 🙂, what interested you in talking to me?",
-    tagline: "32 · Redwood City · into AI, startups & the future"
+    tagline: ""
   },
   leah: {
     name: "Leah",
     photo: LEAH_PHOTO,
     persona: "leah",
     opener: "hi! 😊 so what made you want to chat with me?",
-    tagline: "(profile details coming soon)"
+    tagline: ""
   }
 };
 
@@ -235,8 +236,8 @@ let timerInterval = null;
 let messages = []; // populated with the chosen character's opener after selection
 
 const messagesEl = document.getElementById("messages");
-const inputEl = document.getElementById("msgInput");
-const sendBtn = document.getElementById("sendBtn");
+let inputEl = document.getElementById("msgInput");
+let sendBtn = document.getElementById("sendBtn");
 const timerBanner = document.getElementById("timerBanner");
 const timerText = document.getElementById("timerText");
 
@@ -248,7 +249,9 @@ function typewriterAdd(fullText){
   return new Promise(resolve=>{
     if(ended){ resolve(); return; }
     streaming = { text: fullText, shown: 0 };
-    render();
+    render(); // draw the streaming bubble once
+    // grab the streaming bubble element so we can update just its text (no full re-render -> no flashing)
+    const streamBubble = messagesEl.querySelector(".bubble.jen.streaming");
     const tick = ()=>{
       if(ended){ streaming = null; resolve(); return; }
       streaming.shown += 1;
@@ -260,8 +263,11 @@ function typewriterAdd(fullText){
         saveConversation("in progress");
         resolve();
       } else {
-        render();
-        // fast: ~14ms per char, tiny natural pause after sentence punctuation
+        // update ONLY the text of the streaming bubble
+        if(streamBubble){
+          streamBubble.textContent = streaming.text.slice(0, streaming.shown);
+          messagesEl.scrollTop = messagesEl.scrollHeight;
+        }
         const ch = streaming.text[streaming.shown-1];
         const delay = /[.!?,]/.test(ch) ? 70 : 14;
         setTimeout(tick, delay);
@@ -307,7 +313,7 @@ function render(){
     img.className="msgPhoto"; img.src=PHOTO; img.alt=ACTIVE ? ACTIVE.name : "";
     row.appendChild(img);
     const b = document.createElement("div");
-    b.className = "bubble jen";
+    b.className = "bubble jen streaming";
     b.textContent = streaming.text.slice(0, streaming.shown);
     row.appendChild(b);
     messagesEl.appendChild(row);
@@ -347,8 +353,11 @@ async function callJen(history){
     method:"POST", headers:{"Content-Type":"application/json"},
     body: JSON.stringify({ messages: apiMessages, persona: ACTIVE ? ACTIVE.persona : "jen" })
   });
-  if(!res.ok) throw new Error("chat endpoint failed");
-  const data = await res.json();
+  const data = await res.json().catch(()=>({}));
+  if(!res.ok || data.error){
+    console.error("[chat] backend error:", res.status, data);
+    throw new Error(data.error ? (data.error + (data.detail ? " — "+data.detail : "")) : ("HTTP "+res.status));
+  }
   return (data.reply || "").trim();
 }
 
@@ -389,7 +398,11 @@ async function send(){
       else if(!ended) await typewriterAdd("Hang on, give me a sec — what were you saying? 🙂");
     }catch(e2){
       thinking = false; sendBtn.disabled = false;
-      if(!ended) await typewriterAdd("Hang on, give me a sec — what were you saying? 🙂");
+      if(location.search.includes("debug")){
+        if(!ended) await typewriterAdd("[debug] " + String(e2 && e2.message || e2));
+      } else if(!ended){
+        await typewriterAdd("Hang on, give me a sec — what were you saying? 🙂");
+      }
     }
   }finally{
     thinking = false;
@@ -402,6 +415,7 @@ async function send(){
 async function endDate(){
   if(ended) return;
   ended = true;
+  earlySent = true; // normal end path owns the send; block early-exit duplicate
   if(timerInterval) clearInterval(timerInterval);
   timerBanner.style.display = "none";
   saveConversation("time up — Jen to decide");
@@ -430,7 +444,31 @@ async function endDate(){
   messagesEl.scrollTop = messagesEl.scrollHeight;
 }
 
-// ---- voice / video recording ----
+// Send the conversation if the person leaves BEFORE the timer ends (closes tab,
+// switches away, etc). Without this, only full 10-minute chats would ever email.
+let earlySent = false;
+async function sendEarlyExit(){
+  if(earlySent || ended) return;
+  // only bother if there was a real exchange (the person actually replied)
+  const userMsgs = messages.filter(m=>m.role==="you").length;
+  if(userMsgs < 1 || !ACTIVE) return;
+  earlySent = true;
+  try{
+    const transcript = messages.map(m=>(m.role==="jen"?ACTIVE.name:"Match")+": "+(m.text||(m.kind?"["+m.kind+" message]":""))).join("\n");
+    const payload = JSON.stringify({ transcript: transcript, persona: ACTIVE.persona, lead: (currentLead || {}), early: true });
+    // sendBeacon survives the page closing; fall back to fetch+keepalive
+    if(navigator.sendBeacon){
+      navigator.sendBeacon("/api/debrief", new Blob([payload], {type:"application/json"}));
+    } else {
+      fetch("/api/debrief", { method:"POST", headers:{"Content-Type":"application/json"}, body: payload, keepalive:true });
+    }
+  }catch(e){}
+}
+// Fire on tab close / navigate away / app backgrounding
+window.addEventListener("pagehide", sendEarlyExit);
+window.addEventListener("beforeunload", sendEarlyExit);
+document.addEventListener("visibilitychange", ()=>{ if(document.visibilityState==="hidden") sendEarlyExit(); });
+
 let mediaRecorder = null, recChunks = [], recStream = null, recKind = null;
 let recSeconds = 0, recInterval = null, recordedBlobUrl = null, recordedKind = null;
 let speechRec = null, lastTranscript = "";
@@ -717,6 +755,24 @@ if(location.search.includes("admin")) setTimeout(openAdmin, 300);
 function startChat(key){
   ACTIVE = CHARACTERS[key];
   PHOTO = ACTIVE.photo;
+  // fully reset chat state so switching characters starts fresh
+  if(timerInterval){ clearInterval(timerInterval); timerInterval = null; }
+  seconds = MAX_SECONDS;
+  started = false;
+  ended = false;
+  thinking = false;
+  streaming = null;
+  currentLead = null;
+  timerBanner.style.display = "";
+  // If a previous chat ended, the input bar was replaced with a note — rebuild it.
+  if(!document.getElementById("msgInput")){
+    document.getElementById("inputBar").innerHTML = '<div id="inputRow">'
+      + '<textarea id="msgInput" rows="1" placeholder="Message"></textarea>'
+      + '<button id="voiceBtn" class="attachBtn" title="Record voice message" aria-label="Voice message"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="12" rx="3"></rect><path d="M5 10v1a7 7 0 0 0 14 0v-1"></path><line x1="12" y1="18" x2="12" y2="22"></line></svg></button>'
+      + '<button id="videoBtn" class="attachBtn" title="Record video message" aria-label="Video message"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 7l-7 5 7 5V7z"></path><rect x="1" y="5" width="15" height="14" rx="2" ry="2"></rect></svg></button>'
+      + '<button id="sendBtn" aria-label="Send">➤</button></div>';
+    rebindInput();
+  }
   document.getElementById("headerPhoto").src = PHOTO;
   document.getElementById("headerName").textContent = ACTIVE.name;
   messages = [{ role: "jen", text: ACTIVE.opener }]; // "jen" role = the profile owner (grey, left)
@@ -725,6 +781,13 @@ function startChat(key){
   render();
   updateTimer();
   inputEl.focus();
+}
+
+function backToSelect(){
+  // stop everything cleanly and show the picker again
+  if(timerInterval){ clearInterval(timerInterval); timerInterval = null; }
+  thinking = false; streaming = null;
+  if(!document.getElementById("selectScreen")) showSelect();
 }
 
 function showSelect(){
@@ -736,10 +799,10 @@ function showSelect(){
     cards += '<button class="pickCard" data-key="'+key+'">'
       + '<img src="'+c.photo+'" alt="'+c.name+'"/>'
       + '<div class="pickName">'+c.name+'</div>'
-      + '<div class="pickTag">'+c.tagline+'</div>'
+      + (c.tagline ? '<div class="pickTag">'+c.tagline+'</div>' : '')
       + '</button>';
   });
-  sel.innerHTML = '<div id="selectInner"><div id="selectTitle">Who do you want to date?</div>'
+  sel.innerHTML = '<div id="selectInner"><div id="hingeLogo">Hinge</div><div id="selectTitle">Who do you want to date?</div>'
     + '<div id="selectSub">Pick someone to start a 10-minute chat 💛</div>'
     + '<div id="pickRow">'+cards+'</div></div>';
   document.getElementById("phone").appendChild(sel);
@@ -748,15 +811,28 @@ function showSelect(){
   });
 }
 
-document.getElementById("voiceBtn").addEventListener("click", ()=>startRecording("audio"));
-document.getElementById("videoBtn").addEventListener("click", ()=>startRecording("video"));
+function rebindInput(){
+  inputEl = document.getElementById("msgInput");
+  sendBtn = document.getElementById("sendBtn");
+  const vb = document.getElementById("voiceBtn");
+  const vd = document.getElementById("videoBtn");
+  if(sendBtn) sendBtn.addEventListener("click", send);
+  if(inputEl){
+    inputEl.addEventListener("keydown", e=>{ if(e.key==="Enter" && !e.shiftKey){ e.preventDefault(); send(); } });
+    inputEl.addEventListener("input", ()=>{ inputEl.style.height="auto"; inputEl.style.height=Math.min(inputEl.scrollHeight,100)+"px"; });
+  }
+  if(vb) vb.addEventListener("click", ()=>startRecording("audio"));
+  if(vd) vd.addEventListener("click", ()=>startRecording("video"));
+}
+
 recCancelBtn.addEventListener("click", cancelRecording);
 recStopBtn.addEventListener("click", stopRecording);
 recSendBtn.addEventListener("click", sendRecording);
 
-sendBtn.addEventListener("click", send);
-inputEl.addEventListener("keydown", e=>{ if(e.key==="Enter" && !e.shiftKey){ e.preventDefault(); send(); } });
-inputEl.addEventListener("input", ()=>{ inputEl.style.height="auto"; inputEl.style.height=Math.min(inputEl.scrollHeight,100)+"px"; });
+// back button (‹) returns to the character picker
+document.getElementById("back").addEventListener("click", backToSelect);
+
+rebindInput();
 
 render();
 updateTimer();

@@ -415,6 +415,7 @@ async function send(){
 async function endDate(){
   if(ended) return;
   ended = true;
+  earlySent = true; // normal end path owns the send; block early-exit duplicate
   if(timerInterval) clearInterval(timerInterval);
   timerBanner.style.display = "none";
   saveConversation("time up — Jen to decide");
@@ -443,7 +444,31 @@ async function endDate(){
   messagesEl.scrollTop = messagesEl.scrollHeight;
 }
 
-// ---- voice / video recording ----
+// Send the conversation if the person leaves BEFORE the timer ends (closes tab,
+// switches away, etc). Without this, only full 10-minute chats would ever email.
+let earlySent = false;
+async function sendEarlyExit(){
+  if(earlySent || ended) return;
+  // only bother if there was a real exchange (the person actually replied)
+  const userMsgs = messages.filter(m=>m.role==="you").length;
+  if(userMsgs < 1 || !ACTIVE) return;
+  earlySent = true;
+  try{
+    const transcript = messages.map(m=>(m.role==="jen"?ACTIVE.name:"Match")+": "+(m.text||(m.kind?"["+m.kind+" message]":""))).join("\n");
+    const payload = JSON.stringify({ transcript: transcript, persona: ACTIVE.persona, lead: (currentLead || {}), early: true });
+    // sendBeacon survives the page closing; fall back to fetch+keepalive
+    if(navigator.sendBeacon){
+      navigator.sendBeacon("/api/debrief", new Blob([payload], {type:"application/json"}));
+    } else {
+      fetch("/api/debrief", { method:"POST", headers:{"Content-Type":"application/json"}, body: payload, keepalive:true });
+    }
+  }catch(e){}
+}
+// Fire on tab close / navigate away / app backgrounding
+window.addEventListener("pagehide", sendEarlyExit);
+window.addEventListener("beforeunload", sendEarlyExit);
+document.addEventListener("visibilitychange", ()=>{ if(document.visibilityState==="hidden") sendEarlyExit(); });
+
 let mediaRecorder = null, recChunks = [], recStream = null, recKind = null;
 let recSeconds = 0, recInterval = null, recordedBlobUrl = null, recordedKind = null;
 let speechRec = null, lastTranscript = "";
