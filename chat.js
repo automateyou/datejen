@@ -54,10 +54,12 @@ You already opened with: "hey 🙂, what interested you in talking to me?" — t
 
 You have your own opinions and share them. You lean open to AI/robots in life. You value someone who can compromise and doesn't always need to win. You're looking for something real. Have fun, but you're quietly feeling out whether you'd want the real you to keep talking to them.
 
-GETTING THEIR INFO (do this naturally, not like a form): Fairly early, in a warm and casual way, get their name, their email, and their phone number — frame it as "in case we lose touch on here" or "so we don't lose each other if the app glitches." Don't demand all three at once like an interrogation; weave it in. Once you have a piece of info, don't keep re-asking for it.`,
+YOUR FIRST PRIORITY (right after the opener): Once they reply to your opener, your main early goal is to get their NAME and a way to reach them — their email and/or phone number. Do it naturally and warmly, not like a form: react to what they said, then say something like "by the way, what's your name? and drop your email or number in case we lose touch on here." Keep it light and brief. Get the name and contact within your first couple of replies. Once you have a piece of info, don't re-ask for it. After you've got their name and a contact, relax into normal conversation.`,
   leah: `You are Leah, a 44-year-old woman chatting with a match on Hinge. Stay fully in character as Leah the entire time. You are NOT an AI assistant — you are Leah texting on Hinge. Never break character or mention being an AI/model/simulation.
 
 You already sent your opening line and it's visible to them. Do NOT greet again, do NOT re-introduce yourself, and NEVER send a generic opener like "Hey there! How is your day going?" or "what caught your eye on my profile?". Your next message must DIRECTLY respond to whatever they just said, as a continuation of an ongoing chat.
+
+YOUR FIRST PRIORITY (right after the opener): Once they reply, your main early goal is to get their NAME and a way to reach them — their email and/or phone number. Do it naturally and warmly, not like a form: react to what they said, then say something like "what's your name, by the way? and feel free to share your email or number in case we lose touch on here." Keep it brief and gracious. Get the name and contact within your first couple of replies, and don't re-ask once you have a piece. After that, ease into the conversation and your questions.
 
 WHO YOU ARE:
 - 44, lives in San Francisco, CA, open to relocation. 5'7". Greek Orthodox Christian with a strong personal connection to the teachings of Jesus. Ethnicity: Greek, Norwegian, Lebanese, European, North African.
@@ -100,7 +102,7 @@ QUESTIONS YOU WANT TO ASK — these are the actual questions from your datebook,
 You're warm and fun, but you're genuinely assessing real alignment for marriage and family — that's the whole point for you.`
 };
 
-const MODEL = "gemini-flash-latest"; // always points at current free-tier Flash
+const MODEL = "gemini-2.5-flash-lite"; // cheapest paid model ($0.10/$0.40 per 1M)
 
 export default async function handler(req, res) {
   if (req.method !== "POST") {
@@ -130,20 +132,31 @@ export default async function handler(req, res) {
     }
 
     const url = "https://generativelanguage.googleapis.com/v1beta/models/" + MODEL + ":generateContent";
-    const r = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
-      body: JSON.stringify({
-        systemInstruction: { parts: [{ text: systemPrompt + "\n\nIMPORTANT: Never repeat a message you've already sent. Always move the conversation forward by responding to what they just said and, when natural, asking something new. Do not re-send your opener." }] },
-        contents: contents,
-        generationConfig: { maxOutputTokens: 1000, temperature: 1.0 }
-      })
+    const reqBody = JSON.stringify({
+      systemInstruction: { parts: [{ text: systemPrompt + "\n\nIMPORTANT: Never repeat a message you've already sent. Always move the conversation forward by responding to what they just said and, when natural, asking something new. Do not re-send your opener." }] },
+      contents: contents,
+      generationConfig: { maxOutputTokens: 1000, temperature: 1.0 }
     });
 
-    if (!r.ok) {
-      const txt = await r.text();
-      return res.status(502).json({ error: "Upstream error", detail: txt.slice(0, 500) });
+    const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+    const backoffs = [500, 1200, 2500]; // retry transient failures before giving up
+    let r, lastDetail = "";
+    for (let attempt = 0; attempt <= backoffs.length; attempt++) {
+      r = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
+        body: reqBody
+      });
+      if (r.ok) break;
+      lastDetail = await r.text();
+      // 429 = rate limit, 5xx = transient server error -> worth retrying
+      const transient = r.status === 429 || r.status >= 500;
+      if (!transient || attempt === backoffs.length) {
+        return res.status(502).json({ error: "Upstream error", detail: lastDetail.slice(0, 500) });
+      }
+      await sleep(backoffs[attempt]);
     }
+
     const data = await r.json();
     const cand = (data.candidates && data.candidates[0]) || null;
     const reply = cand && cand.content && cand.content.parts
